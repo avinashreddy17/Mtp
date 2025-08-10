@@ -3,6 +3,7 @@
 import argparse
 import os
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -16,6 +17,7 @@ def train(args):
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Number of GPUs available: {torch.cuda.device_count()}")
 
     # 1. Setup Dataset and DataLoader
     # ---------------------------------
@@ -33,10 +35,11 @@ def train(args):
 
     dataloader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        # Increase batch size for multi-GPU training
+        batch_size=args.batch_size * torch.cuda.device_count(),
         shuffle=True,
-        num_workers=4,
-        pin_memory=True # Speeds up data transfer to GPU
+        num_workers=args.num_workers,
+        pin_memory=True
     )
 
     # 2. Initialize Model and Optimizers
@@ -44,16 +47,24 @@ def train(args):
     model = IMM(
         n_landmarks=args.n_landmarks,
         lambda_perceptual=args.lambda_perceptual
-    ).to(device)
+    )
 
-    # We need separate optimizers for the generator (encoder + generator) and the discriminator
+    # *** IMPORTANT: Wrap the model for multi-GPU training ***
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
+
+    model.to(device)
+
+
+    # Optimizers still target the original model parameters
     optimizer_G = optim.Adam(
-        list(model.encoder.parameters()) + list(model.generator.parameters()),
+        list(model.module.encoder.parameters()) + list(model.module.generator.parameters()),
         lr=args.lr,
         betas=(0.5, 0.999)
     )
     optimizer_D = optim.Adam(
-        model.discriminator.parameters(),
+        model.module.discriminator.parameters(),
         lr=args.lr,
         betas=(0.5, 0.999)
     )
@@ -69,29 +80,21 @@ def train(args):
         for i, batch in progress_bar:
             source_image = batch['image'].to(device)
             target_landmarks = batch['keypoints'].to(device)
-            
-            # The paper uses the source image as the target image for reconstruction
-            target_image = source_image 
+            target_image = source_image
 
             # --- Train the Discriminator ---
-            model.discriminator.train()
             optimizer_D.zero_grad()
-            
-            # Generate an image but don't track gradients for the generator here
             with torch.no_grad():
-                encoded_source = model.encoder(source_image)
-                reconstructed_image = model.generator(encoded_source, target_landmarks)
-
-            d_loss = model.calculate_discriminator_loss(target_image, reconstructed_image)
+                reconstructed_image = model(source_image, target_landmarks)
+            
+            # Access loss calculation methods via model.module
+            d_loss = model.module.calculate_discriminator_loss(target_image, reconstructed_image)
             d_loss.backward()
             optimizer_D.step()
 
             # --- Train the Generator ---
-            model.generator.train()
-            model.encoder.train()
             optimizer_G.zero_grad()
-            
-            g_loss, generated_for_g_loss = model.calculate_generator_loss(source_image, target_image, target_landmarks)
+            g_loss, _ = model.module.calculate_generator_loss(source_image, target_image, target_landmarks)
             g_loss.backward()
             optimizer_G.step()
 
@@ -105,7 +108,8 @@ def train(args):
         # --- Save Checkpoint ---
         if (epoch + 1) % args.checkpoint_interval == 0:
             checkpoint_path = os.path.join(args.checkpoint_dir, f'model_epoch_{epoch+1}.pth')
-            model.save_weights(checkpoint_path)
+            # Save the state_dict of the underlying model
+            model.module.save_weights(checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
 
     print("Training finished!")
@@ -114,24 +118,19 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train the Unsupervised Landmark Model")
     
-    # Paths and Directories
     parser.add_argument('--dataset_path', type=str, required=True, help='Path to the CelebA dataset directory.')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save model checkpoints.')
     
-    # Model and Training Hyperparameters
-    parser.add_argument('--dataset', type=str, default='celeba', choices=['celeba', 'mafl'], help='Which dataset to use.')
-    parser.add_argument('--image_size', type=int, default=128, help='Size to which images are resized.')
-    parser.add_argument('--n_landmarks', type=int, default=5, help='Number of landmarks to detect.')
-    parser.add_argument('--lr', type=float, default=0.0002, help='Learning rate for Adam optimizer.')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training.')
-    parser.add_argument('--epochs', type=int, default=100, help='Total number of epochs to train.')
+    parser.add_argument('--dataset', type=str, default='celeba', choices=['celeba', 'mafl'])
+    parser.add_argument('--image_size', type=int, default=128)
+    parser.add_-argument('--n_landmarks', type=int, default=5)
+    parser.add_argument('--lr', type=float, default=0.0002)
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size *per GPU*.')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of CPU workers for data loading.')
     
-    # Loss Weights
-    parser.add_argument('--lambda_perceptual', type=float, default=0.1, help='Weight for the perceptual loss.')
-
-    # Checkpoint settings
-    parser.add_argument('--checkpoint_interval', type=int, default=5, help='Save a checkpoint every N epochs.')
+    parser.add_argument('--lambda_perceptual', type=float, default=0.1)
+    parser.add_argument('--checkpoint_interval', type=int, default=5)
     
     args = parser.parse_args()
-    
     train(args)
