@@ -45,7 +45,7 @@ echo "--- Starting Python Training Script ---"
 # The batch size of 32 will be multiplied by the number of GPUs (2),
 # resulting in an effective batch size of 64.
 python train.py \
-    --dataset_path /path/to/your/celeba \
+    --dataset_path ~/avinash/Mtp/data/celeba \
     --batch_size 32 \
     --epochs 150 \
     --num_workers 8 \

@@ -105,12 +105,19 @@ def train(args):
                 f"D Loss: {d_loss.item():.4f}"
             )
 
+            if args.debug and i >= 5: # Run for 5 batches in debug mode
+                print("\nDebug mode: Ran for 5 iterations. Exiting.")
+                break
+
         # --- Save Checkpoint ---
         if (epoch + 1) % args.checkpoint_interval == 0:
             checkpoint_path = os.path.join(args.checkpoint_dir, f'model_epoch_{epoch+1}.pth')
             # Save the state_dict of the underlying model
             model.module.save_weights(checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
+
+        if args.debug:
+            break # Exit after the first epoch in debug mode
 
     print("Training finished!")
 
@@ -120,7 +127,8 @@ if __name__ == '__main__':
     
     parser.add_argument('--dataset_path', type=str, required=True, help='Path to the CelebA dataset directory.')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save model checkpoints.')
-    
+    parser.add_argument('--debug', action='store_true', help='Run in debug mode for a few iterations.')
+
     parser.add_argument('--dataset', type=str, default='celeba', choices=['celeba', 'mafl'])
     parser.add_argument('--image_size', type=int, default=128)
     parser.add_-argument('--n_landmarks', type=int, default=5)
