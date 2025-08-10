@@ -106,10 +106,10 @@ class IMM(nn.Module):
         generated_image = self.generator(encoded_source, target_landmarks)
         return generated_image
 
-    def calculate_generator_loss(self, source_image, target_image, target_landmarks):
-        if generated_image is None:
+    def calculate_generator_loss(self, source_image, target_image, target_landmarks,reconstructed_image=None):
+        if reconstructed_image is None:
             encoded_source = self.encoder(source_image)
-            generated_image = self.generator(encoded_source, target_landmarks)
+            reconstructed_image = self.generator(encoded_source, target_landmarks)
         # 1. Reconstruct the image to train the autoencoder part
         encoded_source = self.encoder(source_image)
         reconstructed_image = self.generator(encoded_source, target_landmarks)
