@@ -1,5 +1,3 @@
-# In train.py
-
 import argparse
 import os
 import torch
@@ -72,6 +70,9 @@ def train(args):
         lr=args.lr,
         betas=(0.5, 0.999)
     )
+    
+    # *** FIX: Define the loss criterion ***
+    criterion = nn.BCEWithLogitsLoss()
 
     # Create directory for checkpoints
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -88,16 +89,20 @@ def train(args):
 
             # --- Train the Discriminator ---
             optimizer_D.zero_grad()
-            real_output = model.discriminator(target_image)
+            
+            # *** FIX: Access discriminator via raw_model for multi-GPU compatibility ***
+            # Train with REAL images
+            real_output = raw_model.discriminator(target_image)
             d_loss_real = criterion(real_output, torch.ones_like(real_output))
             d_loss_real.backward()
 
-            # Train with all-fake batch
-            # Generate a batch of images
-            generated_image = model.generator(source_image, target_landmarks)
+            # Train with FAKE images
+            # *** FIX: Access generator via raw_model ***
+            encoded_features = raw_model.encoder(source_image)
+            generated_image = raw_model.generator(encoded_features, target_landmarks)
 
-            # Detach the generated images from the generator's graph
-            fake_output = model.discriminator(generated_image.detach()) 
+            # *** FIX: Detach the generated images to stop gradients flowing to generator ***
+            fake_output = raw_model.discriminator(generated_image.detach()) 
             d_loss_fake = criterion(fake_output, torch.zeros_like(fake_output))
             d_loss_fake.backward()
 
@@ -107,9 +112,14 @@ def train(args):
 
             # --- Train the Generator ---
             optimizer_G.zero_grad()
-            # We need the generated image from this pass for the loss calculation
-            generated_for_g_loss = model(source_image, target_landmarks)
-            g_loss, _ = raw_model.calculate_generator_loss(source_image, target_image, target_landmarks, reconstructed_image=generated_for_g_loss)
+            
+            # We pass the generated image to avoid re-computing it
+            g_loss, _ = raw_model.calculate_generator_loss(
+                source_image, 
+                target_image, 
+                target_landmarks, 
+                reconstructed_image=generated_image # Pass the generated image
+            )
             g_loss.backward()
             optimizer_G.step()
 
@@ -130,8 +140,8 @@ def train(args):
         # --- Save Checkpoint ---
         if (epoch + 1) % args.checkpoint_interval == 0:
             checkpoint_path = os.path.join(args.checkpoint_dir, f'model_epoch_{epoch+1}.pth')
-            # Save the state_dict of the underlying model
-            raw_model.save_weights(checkpoint_path)
+            # *** FIX: Save the state_dict of the underlying model ***
+            torch.save(raw_model.state_dict(), checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
 
     print("Training finished!")
@@ -156,6 +166,5 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help='Run in debug mode for a few iterations.')
     
     args = parser.parse_args()
-    # I also need to update the `imm_model.py` file to accept the generated image
-    # in the generator loss function, to avoid re-computing it.
+    
     train(args)
