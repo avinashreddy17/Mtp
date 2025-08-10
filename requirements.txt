@@ -1,0 +1,7 @@
+# requirements.txt
+torch
+torchvision
+numpy
+Pillow
+tqdm
+matplotlib
