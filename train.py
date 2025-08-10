@@ -131,7 +131,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--dataset', type=str, default='celeba', choices=['celeba', 'mafl'])
     parser.add_argument('--image_size', type=int, default=128)
-    parser.add_-argument('--n_landmarks', type=int, default=5)
+    parser.add_argument('--n_landmarks', type=int, default=5)
     parser.add_argument('--lr', type=float, default=0.0002)
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size *per GPU*.')
     parser.add_argument('--epochs', type=int, default=100)
