@@ -101,7 +101,7 @@ def train(args):
             optimizer_G.zero_grad()
             # We need the generated image from this pass for the loss calculation
             generated_for_g_loss = model(source_image, target_landmarks)
-            g_loss, _ = raw_model.calculate_generator_loss(source_image, target_image, target_landmarks, generated_image=generated_for_g_loss)
+            g_loss, _ = raw_model.calculate_generator_loss(source_image, target_image, target_landmarks, reconstructed_image=generated_for_g_loss)
             g_loss.backward()
             optimizer_G.step()
 
