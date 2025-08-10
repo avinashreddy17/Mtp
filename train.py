@@ -88,13 +88,21 @@ def train(args):
 
             # --- Train the Discriminator ---
             optimizer_D.zero_grad()
-            with torch.no_grad():
-                # The forward pass is the same for both single and multi-GPU
-                reconstructed_image = model(source_image, target_landmarks)
-            
-            # Access loss calculation methods via the raw_model
-            d_loss = raw_model.calculate_discriminator_loss(target_image, reconstructed_image)
-            d_loss.backward()
+            real_output = model.discriminator(target_image)
+            d_loss_real = criterion(real_output, torch.ones_like(real_output))
+            d_loss_real.backward()
+
+            # Train with all-fake batch
+            # Generate a batch of images
+            generated_image = model.generator(source_image, target_landmarks)
+
+            # Detach the generated images from the generator's graph
+            fake_output = model.discriminator(generated_image.detach()) 
+            d_loss_fake = criterion(fake_output, torch.zeros_like(fake_output))
+            d_loss_fake.backward()
+
+            # Total discriminator loss
+            d_loss = d_loss_real + d_loss_fake
             optimizer_D.step()
 
             # --- Train the Generator ---
