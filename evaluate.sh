@@ -40,9 +40,10 @@ echo "--- Starting Python Evaluation Script ---"
 
 python evaluate.py \
     --checkpoint_path ./checkpoints_2gpu/model_epoch_100.pth \
-    --dataset_path ~/avinash/Mtp/data/celeba \
+    --dataset_path data/celeba \
     --output_dir ./results \
-    --visualize
+    --visualize \
+    --n_landmarks 5
 
 echo "--- Evaluation Job Finished ---"
 echo "=========================================================="
