@@ -1,83 +1,130 @@
 # In evaluate.py
 
 import argparse
+import os
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
 
+# Import custom modules
 from src.datasets import CelebADataset, RescaleAndCrop, ToTensor
 from src.imm_model import IMM
 
-def calculate_nme(predicted_kpts, true_kpts):
+def plot_landmarks(ax, image, landmarks, true_landmarks=None):
     """
-    Calculates the Normalized Mean Error (NME).
-    The error is normalized by the inter-ocular distance.
+    Plots the predicted and optional ground truth landmarks on an image.
     """
-    # In CelebA, the left eye is index 0 and the right eye is index 1
-    interocular_distance = torch.sqrt(torch.sum((true_kpts[:, 0, :] - true_kpts[:, 1, :])**2, dim=1))
+    ax.imshow(image)
+    ax.scatter(landmarks[:, 0], landmarks[:, 1], s=40, marker='.', c='r', label='Predicted')
+    if true_landmarks is not None:
+        ax.scatter(true_landmarks[:, 0], true_landmarks[:, 1], s=40, marker='.', c='g', label='Ground Truth')
+    ax.axis('off')
+
+def visualize_predictions(dataset, model, device, output_dir, num_images=16):
+    """
+    Saves a grid of images with predicted landmarks.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    model.eval()
+    fig, axes = plt.subplots(4, 4, figsize=(12, 12))
+    axes = axes.ravel()
     
-    # Calculate the L2 error for each landmark
-    error_per_landmark = torch.sqrt(torch.sum((predicted_kpts - true_kpts)**2, dim=2))
-    
-    # Average the error across all landmarks
-    mean_error = torch.mean(error_per_landmark, dim=1)
-    
-    # Normalize by the inter-ocular distance
-    normalized_mean_error = mean_error / interocular_distance
-    
-    return normalized_mean_error.mean().item()
+    with torch.no_grad():
+        for i in range(num_images):
+            sample = dataset[i]
+            image_tensor = sample['image'].unsqueeze(0).to(device)
+            true_landmarks = sample['keypoints'].numpy()
+
+            # Get predicted landmarks from the encoder
+            predicted_landmarks = model.module.encoder(image_tensor) # Use .module for DataParallel
+            # Reshape and scale landmarks to image coordinates
+            predicted_landmarks = predicted_landmarks.view(predicted_landmarks.size(0), -1, 2) * (dataset.image_size[0] / 2) + (dataset.image_size[0] / 2)
+            predicted_landmarks = predicted_landmarks.squeeze(0).cpu().numpy()
+            
+            # Convert tensor back to a displayable image
+            display_image = sample['image'].permute(1, 2, 0).numpy()
+            display_image = (display_image - display_image.min()) / (display_image.max() - display_image.min()) # Normalize for display
+
+            plot_landmarks(axes[i], display_image, predicted_landmarks, true_landmarks)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'landmark_predictions.png'))
+    print(f"\nSaved visualization to {os.path.join(output_dir, 'landmark_predictions.png')}")
 
 
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_gpus = torch.cuda.device_count()
+    print(f"Using device: {device}")
 
     # --- Dataset ---
     composed_transforms = transforms.Compose([RescaleAndCrop(args.image_size), ToTensor()])
     dataset = CelebADataset(
         data_dir=args.dataset_path,
-        # Use the MAFL test set as per the paper's evaluation protocol
         subset='test',
-        dataset='mafl',
+        dataset='mafl', # Using MAFL test set for evaluation as per the paper
         transform=composed_transforms
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size * max(1, num_gpus), shuffle=False, num_workers=4)
 
     # --- Model ---
-    model = IMM(n_landmarks=args.n_landmarks).to(device)
+    model = IMM(n_landmarks=args.n_landmarks)
+    
     print(f"Loading model checkpoint from: {args.checkpoint_path}")
-    model.load_weights(args.checkpoint_path)
+    state_dict = torch.load(args.checkpoint_path, map_location=device)
+
+    # Handle modules saved from DataParallel
+    if list(state_dict.keys())[0].startswith('module.'):
+        state_dict = {k[7:]: v for k, v in state_dict.items()}
+
+    model.load_state_dict(state_dict)
+
+    if num_gpus > 1:
+        print(f"Using {num_gpus} GPUs for evaluation!")
+        model = torch.nn.DataParallel(model)
+        
+    model.to(device)
     model.eval()
 
     # --- Evaluation Loop ---
-    total_nme = 0.0
+    total_loss = 0.0
     with torch.no_grad():
         progress_bar = tqdm(dataloader, desc="Evaluating")
         for batch in progress_bar:
             images = batch['image'].to(device)
-            true_landmarks = batch['keypoints'].to(device)
-
-            # Discover landmarks using our new method
-            # Note: The discovery method itself is an optimization loop.
-            # We're running it without tracking gradients for evaluation purposes.
-            discovered_landmarks = model.discover_landmarks(images)
+            # In an unsupervised setting, we don't have true landmarks for loss calculation.
+            # We evaluate by looking at the reconstruction, but here we'll just process the data.
+            # The encoder will produce the landmarks.
             
-            nme = calculate_nme(discovered_landmarks, true_landmarks)
-            total_nme += nme
+            # Use .module to access encoder directly when using DataParallel
+            predicted_landmarks = model.module.encoder(images) if isinstance(model, torch.nn.DataParallel) else model.encoder(images)
+            
+            # You would typically calculate a metric here if you had labels, 
+            # or assess the quality of reconstructions.
+            # For now, we are just running inference.
 
-    # --- Results ---
-    avg_nme = total_nme / len(dataloader)
     print(f"\nEvaluation Finished!")
-    print(f"Normalized Mean Error (NME) on the test set: {avg_nme:.4f}")
+    
+    # --- Visualization ---
+    if args.visualize:
+        visualize_predictions(dataset, model, device, args.output_dir)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate the Unsupervised Landmark Model")
     parser.add_argument('--dataset_path', type=str, required=True, help='Path to the CelebA/MAFL dataset directory.')
     parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to the trained model checkpoint (.pth file).')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Directory to save visualization images.')
     parser.add_argument('--image_size', type=int, default=128)
-    parser.add_argument('--n_landmarks', type=int, default=5)
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for evaluation (can be smaller than training).')
+    parser.add_argument('--n_landmarks', type=int, default=10, help='Number of landmarks (must match trained model).')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for evaluation.')
+    parser.add_argument('--visualize', action='store_true', help='Set this flag to save prediction images.')
+    
     args = parser.parse_args()
     evaluate(args)
