@@ -1,5 +1,3 @@
-# In evaluate.py
-
 import argparse
 import os
 import torch
@@ -41,34 +39,40 @@ def visualize_predictions(dataset, model, device, output_dir, num_images=16):
             image_tensor = sample['image'].unsqueeze(0).to(device)
             true_landmarks = sample['keypoints'].numpy()
 
-            # Get predicted landmarks from the encoder
-            predicted_landmarks = model.module.encoder(image_tensor) # Use .module for DataParallel
+            # --- FIX: Check if model is wrapped in DataParallel before accessing .module ---
+            if isinstance(model, torch.nn.DataParallel):
+                predicted_landmarks = model.module.encoder(image_tensor)
+            else:
+                predicted_landmarks = model.encoder(image_tensor)
+            
             # Reshape and scale landmarks to image coordinates
             predicted_landmarks = predicted_landmarks.view(predicted_landmarks.size(0), -1, 2) * (dataset.image_size[0] / 2) + (dataset.image_size[0] / 2)
             predicted_landmarks = predicted_landmarks.squeeze(0).cpu().numpy()
             
             # Convert tensor back to a displayable image
             display_image = sample['image'].permute(1, 2, 0).numpy()
-            display_image = (display_image - display_image.min()) / (display_image.max() - display_image.min()) # Normalize for display
+            display_image = (display_image - display_image.min()) / (display_image.max() - display_image.min())
 
             plot_landmarks(axes[i], display_image, predicted_landmarks, true_landmarks)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'landmark_predictions.png'))
-    print(f"\nSaved visualization to {os.path.join(output_dir, 'landmark_predictions.png')}")
+    save_path = os.path.join(output_dir, 'landmark_predictions.png')
+    plt.savefig(save_path)
+    
+    print("\nSaved visualization to {}".format(save_path))
 
 
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_gpus = torch.cuda.device_count()
-    print(f"Using device: {device}")
+    print("Using device: {}".format(device))
 
     # --- Dataset ---
     composed_transforms = transforms.Compose([RescaleAndCrop(args.image_size), ToTensor()])
     dataset = CelebADataset(
         data_dir=args.dataset_path,
         subset='test',
-        dataset='mafl', # Using MAFL test set for evaluation as per the paper
+        dataset='mafl',
         transform=composed_transforms
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size * max(1, num_gpus), shuffle=False, num_workers=4)
@@ -76,7 +80,7 @@ def evaluate(args):
     # --- Model ---
     model = IMM(n_landmarks=args.n_landmarks)
     
-    print(f"Loading model checkpoint from: {args.checkpoint_path}")
+    print("Loading model checkpoint from: {}".format(args.checkpoint_path))
     state_dict = torch.load(args.checkpoint_path, map_location=device)
 
     # Handle modules saved from DataParallel
@@ -86,30 +90,25 @@ def evaluate(args):
     model.load_state_dict(state_dict)
 
     if num_gpus > 1:
-        print(f"Using {num_gpus} GPUs for evaluation!")
+        print("Using {} GPUs for evaluation!".format(num_gpus))
         model = torch.nn.DataParallel(model)
         
     model.to(device)
     model.eval()
 
     # --- Evaluation Loop ---
-    total_loss = 0.0
     with torch.no_grad():
         progress_bar = tqdm(dataloader, desc="Evaluating")
         for batch in progress_bar:
             images = batch['image'].to(device)
-            # In an unsupervised setting, we don't have true landmarks for loss calculation.
-            # We evaluate by looking at the reconstruction, but here we'll just process the data.
-            # The encoder will produce the landmarks.
             
-            # Use .module to access encoder directly when using DataParallel
-            predicted_landmarks = model.module.encoder(images) if isinstance(model, torch.nn.DataParallel) else model.encoder(images)
+            # --- FIX: Check for DataParallel here as well ---
+            if isinstance(model, torch.nn.DataParallel):
+                predicted_landmarks = model.module.encoder(images)
+            else:
+                predicted_landmarks = model.encoder(images)
             
-            # You would typically calculate a metric here if you had labels, 
-            # or assess the quality of reconstructions.
-            # For now, we are just running inference.
-
-    print(f"\nEvaluation Finished!")
+    print("\nEvaluation Finished!")
     
     # --- Visualization ---
     if args.visualize:
