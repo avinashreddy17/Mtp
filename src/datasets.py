@@ -42,15 +42,13 @@ class CelebADataset(Dataset):
         self.image_size = image_size
 
         if dataset == 'celeba':
-            # Path to the annotations file
-            self.landmarks_file = os.path.join(data_dir, 'list_landmarks_align_celeba.txt')
-            # Path to the file listing which images belong to which subset (train/val/test)
-            self.partition_file = os.path.join(data_dir, 'list_eval_partition.txt')
-            self.image_dir = os.path.join(data_dir, 'img_align_celeba')
+            self.landmarks_file = os.path.join(data_dir, 'Anno', 'list_landmarks_align_celeba.txt')
+            self.partition_file = os.path.join(data_dir, 'Eval', 'list_eval_partition.txt')
+            self.image_dir = os.path.join(data_dir, 'Img', 'img_align_celeba')
         else: # MAFL
-            self.landmarks_file = os.path.join(data_dir, 'list_landmarks_mafl.txt')
-            self.partition_file = os.path.join(data_dir, 'list_eval_partition.txt')
-            self.image_dir = os.path.join(data_dir, 'img_mafl')
+            self.landmarks_file = os.path.join(data_dir, 'MAFL', 'list_landmarks_mafl.txt')
+            self.partition_file = os.path.join(data_dir, 'MAFL', 'list_eval_partition.txt')
+            self.image_dir = os.path.join(data_dir, 'Img', 'img_align_celeba') # MAFL images are also in the main image dir
             
         self.image_filenames = []
         self.landmarks = {}
