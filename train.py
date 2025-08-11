@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 
-from src.datasets import CelebADataset, RescaleAndCrop, ToTensor, create_heatmap_tensor
+from src.datasets import CelebADataset, RescaleAndCrop, ToTensor
 from src.imm_model import IMM
 
 def train(args):
@@ -44,17 +44,13 @@ def train(args):
 
             # --- Train Discriminator ---
             optimizer_D.zero_grad()
-
+            
             # Train with Real Images
             d_real_pred = raw_model.discriminator(real_images)
             d_real_loss = criterion(d_real_pred, torch.ones_like(d_real_pred))
             
-            # Generate fake images for discriminator training
-            predicted_landmarks = raw_model.encoder(real_images)
-            # Scale landmarks from [-1, 1] to [0, H] image coords
-            landmarks_scaled = (predicted_landmarks.detach() * 0.5 + 0.5) * args.image_size
-            heatmaps = create_heatmap_tensor(landmarks_scaled, image_size_tuple)
-            fake_images = raw_model.generator(real_images, heatmaps)
+            # Generate fake images using the full model forward pass
+            fake_images, _ = model(real_images)
             
             # Train with Fake Images
             d_fake_pred = raw_model.discriminator(fake_images.detach())
@@ -66,8 +62,9 @@ def train(args):
 
             # --- Train Generator & Encoder ---
             optimizer_G.zero_grad()
-            # We can re-use the fake_images from the discriminator step
-            g_loss = raw_model.calculate_generator_loss(real_images, fake_images)
+            # We must re-run the forward pass to build the graph for the generator
+            fake_images_for_g, _ = model(real_images)
+            g_loss = raw_model.calculate_generator_loss(real_images, fake_images_for_g)
             g_loss.backward()
             optimizer_G.step()
 
