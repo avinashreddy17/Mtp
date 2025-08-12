@@ -32,23 +32,23 @@ def visualize_predictions(dataset, model, device, output_dir, num_images=16):
     model.eval()
     fig, axes = plt.subplots(4, 4, figsize=(12, 12))
     axes = axes.ravel()
-    
+
     with torch.no_grad():
         for i in range(num_images):
             sample = dataset[i]
             image_tensor = sample['image'].unsqueeze(0).to(device)
             true_landmarks = sample['keypoints'].numpy()
 
-            # --- FIX: Check if model is wrapped in DataParallel before accessing .module ---
+            # Handle single vs multi-GPU
             if isinstance(model, torch.nn.DataParallel):
-                predicted_landmarks = model.module.encoder(image_tensor)
+                reconstructed_image, predicted_landmarks = model(image_tensor)
             else:
-                predicted_landmarks = model.encoder(image_tensor)
-            
+                reconstructed_image, predicted_landmarks = model(image_tensor)
+
             # Reshape and scale landmarks to image coordinates
-            predicted_landmarks = predicted_landmarks.view(predicted_landmarks.size(0), -1, 2) * (dataset.image_size[0] / 2) + (dataset.image_size[0] / 2)
-            predicted_landmarks = predicted_landmarks.squeeze(0).cpu().numpy()
-            
+            image_size = dataset.image_size[0]
+            predicted_landmarks = (predicted_landmarks.squeeze(0).cpu().numpy() * 0.5 + 0.5) * image_size
+
             # Convert tensor back to a displayable image
             display_image = sample['image'].permute(1, 2, 0).numpy()
             display_image = (display_image - display_image.min()) / (display_image.max() - display_image.min())
@@ -58,7 +58,6 @@ def visualize_predictions(dataset, model, device, output_dir, num_images=16):
     plt.tight_layout()
     save_path = os.path.join(output_dir, 'landmark_predictions.png')
     plt.savefig(save_path)
-    
     print("\nSaved visualization to {}".format(save_path))
 
 
@@ -68,18 +67,18 @@ def evaluate(args):
     print("Using device: {}".format(device))
 
     # --- Dataset ---
-    composed_transforms = transforms.Compose([RescaleAndCrop(args.image_size), ToTensor()])
+    image_size_tuple = (args.image_size, args.image_size)
+    composed_transforms = transforms.Compose([RescaleAndCrop(image_size_tuple), ToTensor()])
     dataset = CelebADataset(
         data_dir=args.dataset_path,
-        subset='test',
-        dataset='mafl',
-        transform=composed_transforms
+        subset='test', # Use the test split
+        transform=composed_transforms,
+        image_size=image_size_tuple
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size * max(1, num_gpus), shuffle=False, num_workers=4)
 
     # --- Model ---
     model = IMM(n_landmarks=args.n_landmarks)
-    
     print("Loading model checkpoint from: {}".format(args.checkpoint_path))
     state_dict = torch.load(args.checkpoint_path, map_location=device)
 
@@ -92,7 +91,7 @@ def evaluate(args):
     if num_gpus > 1:
         print("Using {} GPUs for evaluation!".format(num_gpus))
         model = torch.nn.DataParallel(model)
-        
+
     model.to(device)
     model.eval()
 
@@ -101,15 +100,14 @@ def evaluate(args):
         progress_bar = tqdm(dataloader, desc="Evaluating")
         for batch in progress_bar:
             images = batch['image'].to(device)
-            
-            # --- FIX: Check for DataParallel here as well ---
+            # The full forward pass gets us the reconstructions and landmarks
             if isinstance(model, torch.nn.DataParallel):
-                predicted_landmarks = model.module.encoder(images)
+                _, _ = model(images)
             else:
-                predicted_landmarks = model.encoder(images)
-            
+                _, _ = model(images)
+
     print("\nEvaluation Finished!")
-    
+
     # --- Visualization ---
     if args.visualize:
         visualize_predictions(dataset, model, device, args.output_dir)
@@ -117,13 +115,13 @@ def evaluate(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate the Unsupervised Landmark Model")
-    parser.add_argument('--dataset_path', type=str, required=True, help='Path to the CelebA/MAFL dataset directory.')
+    parser.add_argument('--dataset_path', type=str, required=True, help='Path to the CelebA dataset directory.')
     parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to the trained model checkpoint (.pth file).')
     parser.add_argument('--output_dir', type=str, default='./results', help='Directory to save visualization images.')
     parser.add_argument('--image_size', type=int, default=128)
     parser.add_argument('--n_landmarks', type=int, default=10, help='Number of landmarks (must match trained model).')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for evaluation.')
     parser.add_argument('--visualize', action='store_true', help='Set this flag to save prediction images.')
-    
+
     args = parser.parse_args()
     evaluate(args)
